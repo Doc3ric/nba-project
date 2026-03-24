@@ -42,7 +42,7 @@ const CourtSVG = () => (
     {/* Free throw circle */}
     <ellipse
       cx={sx(0)} cy={sy(142.5)}
-      rx={(sx(60) - sx(-60))} ry={(sy(80) - sy(142.5)) * -1}
+      rx={(sx(60) - sx(-60))} ry={Math.abs(sy(80) - sy(142.5))}
       fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={1.2}
     />
     {/* Rim */}

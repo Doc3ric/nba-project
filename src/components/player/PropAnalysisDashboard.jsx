@@ -1,14 +1,29 @@
-import React, { useState, memo } from 'react';
+import React, { useState, memo, useRef, useEffect, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 import { Target, Info, ChevronDown, ChevronUp, Check, Zap, Plus, Search, TrendingUp, Shield, Activity, BarChart3 } from 'lucide-react';
 import { usePropAnalysis } from '../../hooks/useAnalytics';
+import { useSplits } from '../../hooks/useSplits';
 import PlayerIcon from '../common/PlayerIcon';
 import LineMovementChart from './LineMovementChart';
 
 /**
  * Highly customized advanced prop analytics dashboard replicating Outlier.bet aesthetics.
+ * Real-time prop analysis with smart defaults and data validation.
  */
-const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent = { id: 0, abbreviation: 'UNK' } }) => {
+
+// NBA Team Colors for visual identification
+const TEAM_COLORS = {
+  'ATL': '#E03A3E', 'BOS': '#007A33', 'BKN': '#000000', 'CHA': '#1D1160',
+  'CHI': '#CE1141', 'CLE': '#860038', 'DAL': '#002B80', 'DEN': '#0E2240',
+  'DET': '#0C2340', 'GSW': '#1D428A', 'HOU': '#CE1141', 'LAC': '#C4CED4',
+  'LAL': '#552583', 'MEM': '#12173F', 'MIA': '#98002E', 'MIL': '#12173F',
+  'MIN': '#0C2340', 'NOP': '#0C2340', 'NYK': '#006BB6', 'OKC': '#007AC1',
+  'ORL': '#0077B6', 'PHI': '#1D428A', 'PHX': '#1D1160', 'POR': '#E03A3E',
+  'SAC': '#5A2D81', 'SAS': '#000000', 'TOR': '#CE1141', 'UTA': '#002B80',
+  'WAS': '#002B81'
+};
+
+const PropAnalysisDashboard = memo(({ playerId, stats, playerName, teamAbbr, injuryStatus, nextOpponent = { id: 0, abbreviation: 'UNK' } }) => {
   // Stat categories matching the screenshot (extended logic handled centrally where possible)
   const categories = [
     { id: 'pts',      label: 'PTS' },
@@ -31,13 +46,47 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
     { id: 'ftm',      label: 'FTM', info: true },
   ];
 
+  const teamsList = [
+    'ALL', 'ATL', 'BOS', 'BRK', 'CHA', 'CHI', 'CLE', 'DAL', 'DEN', 'DET',
+    'GSW', 'HOU', 'LAC', 'LAL', 'MEM', 'MIA', 'MIL', 'MIN', 'NOP', 'NYK',
+    'OKC', 'ORL', 'PHI', 'PHX', 'POR', 'SAC', 'SAS', 'TOR', 'UTA', 'WAS'
+  ];
+
+  const gameHistoryOptions = [
+    { label: 'Last 5 Games', value: 5 },
+    { label: 'Last 10 Games', value: 10 },
+    { label: 'Last 20 Games', value: 20 },
+  ];
+
   const [selectedCategory, setSelectedCategory] = useState({ id: 'pts', label: 'PTS' });
-  const [line, setLine] = useState(27.5); // Default hook logic will snap to this if dynamic
+  
+  // Smart default line: use player's L10 average rounded up
+  const smartDefaultLine = useMemo(() => {
+    if (!stats || stats.length === 0) return 27.5;
+    const recentGames = stats.slice(0, 10);
+    const avg = recentGames.reduce((sum, g) => sum + (g[selectedCategory.id] || 0), 0) / recentGames.length;
+    return Math.round((avg + 0.5) * 2) / 2; // Round to nearest 0.5
+  }, [stats, selectedCategory.id]);
+  
+  const [line, setLine] = useState(smartDefaultLine);
   const [activeSide, setActiveSide] = useState('Under'); // 'Over' or 'Under'
   const [activeTab, setActiveTab] = useState('analysis'); // 'analysis' | 'odds-tracking' | 'metrics'
   
-  // Dummy active filters modeling the screenshot design
-  const [gameHistory, setGameHistory] = useState('Last 10 Games');
+  // Update line when category changes (suggest new smart default)
+  useEffect(() => {
+    setLine(smartDefaultLine);
+  }, [smartDefaultLine]);
+  
+  // Game history now stores the numeric value
+  const [gameHistoryNum, setGameHistoryNum] = useState(10);
+  const [gameHistoryDropdownOpen, setGameHistoryDropdownOpen] = useState(false);
+  const gameHistoryRef = useRef(null);
+  
+  // H2H opponent filter
+  const [selectedOpponent, setSelectedOpponent] = useState(null); // null = all teams
+  const [opponentDropdownOpen, setOpponentDropdownOpen] = useState(false);
+  const opponentRef = useRef(null);
+  
   const [splitHome, setSplitHome] = useState(false);
   const [splitAway, setSplitAway] = useState(false);
   const [splitW, setSplitW] = useState(false);
@@ -53,12 +102,64 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
     season: seasonOption === '25/26' ? '2025' : '2024'
   };
 
-  const { hitRates, chartData } = usePropAnalysis(stats, selectedCategory.id, line, hookFilters, nextOpponent.abbreviation);
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (gameHistoryRef.current && !gameHistoryRef.current.contains(event.target)) {
+        setGameHistoryDropdownOpen(false);
+      }
+      if (opponentRef.current && !opponentRef.current.contains(event.target)) {
+        setOpponentDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  // Derive Median & Average for displaying below Last 10
-  const l10Data = chartData.slice(-10);
-  const mean = l10Data.length ? (l10Data.reduce((acc, curr) => acc + curr.value, 0) / l10Data.length).toFixed(1) : 0;
-  const sortedVals = [...l10Data.map(d => d.value)].sort((a,b) => a-b);
+  const { hitRates, chartData } = usePropAnalysis(stats, selectedCategory.id, line, hookFilters, nextOpponent?.abbreviation);
+
+  // Filter stats by opponent if selected for H2H analysis
+  const h2hStats = selectedOpponent && selectedOpponent !== 'ALL' 
+    ? stats.filter(game => {
+        if (!game.game) return false;
+        const opponent = game.game.home_team?.abbreviation === teamAbbr 
+          ? game.game.visitor_team?.abbreviation 
+          : game.game.home_team?.abbreviation;
+        return opponent === selectedOpponent;
+      })
+    : stats;
+
+  // If opponent is selected, recalculate with filtered stats
+  const { hitRates: h2hHitRates, chartData: h2hChartData } = usePropAnalysis(h2hStats, selectedCategory.id, line, hookFilters, nextOpponent?.abbreviation);
+  
+  // Fetch backend splits data (using playerId prop passed from parent)
+  const { splits: backendSplits, loading: splitsLoading } = useSplits(
+    playerId ? parseInt(playerId) : null, 
+    selectedCategory.id, 
+    line, 
+    selectedOpponent && selectedOpponent !== 'ALL' ? selectedOpponent : null
+  );
+  
+  // Use backend splits if available, otherwise fall back to local calculations
+  const displayHitRates = backendSplits && backendSplits.l5 ? {
+    l5: backendSplits.l5 || { hits: 0, total: 0, percentage: 0 },
+    l10: backendSplits.l10 || { hits: 0, total: 0, percentage: 0 },
+    l20: backendSplits.l20 || { hits: 0, total: 0, percentage: 0 },
+    h2h: backendSplits.h2h || { hits: 0, total: 0, percentage: 0 },
+    season: backendSplits.season || { hits: 0, total: 0, percentage: 0 }
+  } : (selectedOpponent && selectedOpponent !== 'ALL' ? h2hHitRates : hitRates);
+
+  // Filter chart data by opponent if selected
+  const displayChartData = selectedOpponent && selectedOpponent !== 'ALL' 
+    ? chartData.filter(game => game.opponent === selectedOpponent)
+    : chartData;
+  
+  // Limit chart data to selected game history
+  const chartDataLimited = displayChartData.slice(-gameHistoryNum);
+  
+  // Derive Median & Average for displaying below Last N
+  const mean = chartDataLimited.length ? (chartDataLimited.reduce((acc, curr) => acc + curr.value, 0) / chartDataLimited.length).toFixed(1) : 0;
+  const sortedVals = [...chartDataLimited.map(d => d.value)].sort((a,b) => a-b);
   const median = sortedVals.length ? (sortedVals.length % 2 === 0 
     ? ((sortedVals[sortedVals.length/2 - 1] + sortedVals[sortedVals.length/2]) / 2).toFixed(1)
     : sortedVals[Math.floor(sortedVals.length/2)].toFixed(1)) : 0;
@@ -86,21 +187,54 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
   };
 
   const AxisTick = ({ x, y, payload }) => {
-    // We pass formatted Opponent\nDate string to standard Recharts category axis, need to split it
+    // We pass formatted Opponent|Date string, need to split it
     const parts = payload.value.split('|');
     const opp = parts[0] || '';
     const dateStr = parts[1] || '';
+    const teamColor = TEAM_COLORS[opp] || '#4a5568';
+
     return (
       <g transform={`translate(${x},${y})`}>
-        <circle cx={0} cy={16} r={12} fill="#1e1e1e" stroke="#2d3446" />
-        <text x={0} y={16} dy={3} textAnchor="middle" fill="#e2e8f0" fontSize={8} fontWeight="bold">{opp}</text>
-        <text x={0} y={40} textAnchor="middle" fill="#8b96a5" fontSize={9}>{dateStr.replace(' ', '\n')}</text>
+        {/* Team Colored Circle */}
+        <circle 
+          cx={0} 
+          cy={0} 
+          r={13} 
+          fill={teamColor} 
+          stroke="#ffffff" 
+          strokeWidth={1}
+          opacity={0.85}
+        />
+        
+        {/* Team Abbreviation */}
+        <text 
+          x={0} 
+          y={3} 
+          textAnchor="middle" 
+          fill="#ffffff" 
+          fontSize={7} 
+          fontWeight="bold"
+          style={{ textShadow: '0 0 2px rgba(0,0,0,0.8)' }}
+        >
+          {opp}
+        </text>
+        
+        {/* Date label below */}
+        <text 
+          x={0} 
+          y={23} 
+          textAnchor="middle" 
+          fill="#8b96a5" 
+          fontSize={7}
+        >
+          {dateStr}
+        </text>
       </g>
     );
   };
 
   // Build the chart array. We use opponent|date string for the XAxis tick mapping
-  const renderChartData = chartData.map(d => ({
+  const renderChartData = chartDataLimited.map(d => ({
     ...d,
     xTickLabel: `${d.opponent}|${d.date}`,
   }));
@@ -120,7 +254,7 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
             <div className="flex flex-col">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[10px] font-bold bg-[#1a2f26] text-[#1df16a] border border-[#1df16a]/30 px-1.5 py-0.5 rounded uppercase tracking-wider">
-                  {teamAbbr} @ {nextOpponent.abbreviation}
+                  {teamAbbr} @ {nextOpponent?.abbreviation || 'UNK'}
                 </span>
                 <span className="text-[10px] text-gray-400">Sun 7:00 PM</span>
               </div>
@@ -129,10 +263,27 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
                 <span className="text-[10px] font-bold bg-[#1e1e1e] text-gray-300 border border-gray-700 px-1.5 py-0.5 rounded">
                   {teamAbbr} <span className="text-gray-500">|</span> SG
                 </span>
+                {injuryStatus && injuryStatus !== 'Active' && (
+                  <span className="text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/40 px-1.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1 shadow-[0_0_10px_rgba(239,68,68,0.3)]">
+                    <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" />
+                    INJURED {injuryStatus !== 'Injured' && injuryStatus !== 'Out' ? `- ${injuryStatus}` : ''}
+                  </span>
+                )}
               </h1>
-              <span className="text-lg font-bold text-gray-300 mt-1">
-                {selectedCategory.label} - Over {line}
-              </span>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-lg font-bold text-gray-300">
+                  {selectedCategory.label} - Over
+                </span>
+                <input 
+                  type="number" 
+                  step="0.5"
+                  min="0"
+                  value={line}
+                  onChange={(e) => setLine(parseFloat(e.target.value) || 0)}
+                  className="w-20 bg-[#1a1a1a] border border-gray-700 rounded px-2 py-1 text-lg font-bold text-white focus:outline-none focus:border-sports-highlight focus:ring-1 focus:ring-sports-highlight"
+                  placeholder="27.5"
+                />
+              </div>
             </div>
           </div>
 
@@ -255,20 +406,100 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
       {activeTab === 'analysis' && (
       <div className="p-4 md:p-6">
         
-        {/* Title */}
-        <h2 className="text-xl font-bold text-white tracking-tight mb-4">
-          {playerName} {selectedCategory.label} Last 10
-        </h2>
+        {/* Title with Data Badge */}
+        <div className="flex items-end justify-between gap-3 mb-4">
+          <h2 className="text-xl font-bold text-white tracking-tight">
+            {playerName} {selectedCategory.label} Last {gameHistoryNum}
+          </h2>
+          <div className="flex items-center gap-2">
+            <div className="text-right text-xs">
+              <span className="block text-gray-400">Real Average</span>
+              <span className="text-lg font-bold text-[#1df16a]">
+                {(() => {
+                  const recent = stats.slice(0, gameHistoryNum);
+                  if (recent.length === 0) return '—';
+                  const avg = recent.reduce((sum, g) => sum + (g[selectedCategory.id] || 0), 0) / recent.length;
+                  return avg.toFixed(1);
+                })()}
+              </span>
+            </div>
+            <div className="text-right text-xs">
+              <span className="block text-gray-400">Your Line</span>
+              <span className="text-lg font-bold text-purple-400">{line.toFixed(1)}</span>
+            </div>
+            <div className="bg-[#1a2f26] border border-[#1df16a]/30 rounded px-2 py-1 text-[10px] font-bold text-[#1df16a] uppercase">
+              ✓ Real Data
+            </div>
+          </div>
+        </div>
 
         {/* Filters Top Row */}
         <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
            <div className="flex flex-wrap gap-4">
               {/* Game History */}
-              <div>
+              <div ref={gameHistoryRef}>
                  <p className="text-[10px] text-gray-500 flex items-center gap-1 mb-1.5">Game History <Info size={10}/></p>
-                 <button className="bg-[#1a1a1a] hover:bg-[#222] border border-gray-700 rounded px-3 py-1 text-xs text-gray-300 font-bold flex items-center gap-2">
-                    {gameHistory} <ChevronDown size={12}/>
-                 </button>
+                 <div className="relative">
+                   <button 
+                     onClick={() => setGameHistoryDropdownOpen(!gameHistoryDropdownOpen)}
+                     className="bg-[#1a1a1a] hover:bg-[#222] border border-gray-700 rounded px-3 py-1 text-xs text-gray-300 font-bold flex items-center gap-2"
+                   >
+                      {`Last ${gameHistoryNum} Games`} <ChevronDown size={12}/>
+                   </button>
+                   {gameHistoryDropdownOpen && (
+                     <div className="absolute top-full left-0 mt-1 bg-[#1a1a1a] border border-gray-700 rounded shadow-lg z-10 min-w-[150px]">
+                       {gameHistoryOptions.map(opt => (
+                         <button
+                           key={opt.value}
+                           onClick={() => {
+                             setGameHistoryNum(opt.value);
+                             setGameHistoryDropdownOpen(false);
+                           }}
+                           className={`w-full text-left px-4 py-2 text-xs font-bold transition-all ${
+                             gameHistoryNum === opt.value
+                               ? 'bg-sports-highlight/20 text-sports-highlight'
+                               : 'text-gray-300 hover:bg-[#222] hover:text-gray-100'
+                           }`}
+                         >
+                           {opt.label}
+                         </button>
+                       ))}
+                     </div>
+                   )}
+                 </div>
+              </div>
+
+              {/* H2H Opponent Filter */}
+              <div ref={opponentRef}>
+                 <p className="text-[10px] text-gray-500 flex items-center gap-1 mb-1.5">H2H Opponent <Info size={10}/></p>
+                 <div className="relative">
+                   <button 
+                     onClick={() => setOpponentDropdownOpen(!opponentDropdownOpen)}
+                     className="bg-[#1a1a1a] hover:bg-[#222] border border-gray-700 rounded px-3 py-1 text-xs text-gray-300 font-bold flex items-center gap-2"
+                   >
+                      {selectedOpponent || 'All Teams'} <ChevronDown size={12}/>
+                   </button>
+                   {opponentDropdownOpen && (
+                     <div className="absolute top-full left-0 mt-1 bg-[#1a1a1a] border border-gray-700 rounded shadow-lg z-10 max-h-60 w-32 overflow-y-auto">
+                       {teamsList.map(team => (
+                         <button
+                           key={team}
+                           onClick={() => {
+                             setSelectedOpponent(team === 'ALL' ? null : team);
+                             setOpponentDropdownOpen(false);
+                           }}
+                           className={`w-full text-left px-4 py-2 text-xs font-bold transition-all ${
+                             (team === 'ALL' && !selectedOpponent) || selectedOpponent === team
+                               ? 'bg-sports-highlight/20 text-sports-highlight'
+                               : 'text-gray-300 hover:bg-[#222] hover:text-gray-100'
+                           }`}
+                         >
+                           {team}
+                         </button>
+                       ))}
+                     </div>
+                   )}
+                 </div>
               </div>
 
               {/* Splits */}
@@ -319,12 +550,25 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
            
            {/* Left Info: L10 % */}
            <div>
-              <p className="text-gray-400 text-[11px] mb-1">Last 10</p>
+              <p className="text-gray-400 text-[11px] mb-1">Last {gameHistoryNum}</p>
               <div className="flex items-baseline gap-2">
-                 <span className={`text-4xl font-black ${hitRates.l10.percentage >= 50 ? 'text-sports-accent text-glow-accent' : 'text-sports-red text-glow-red'}`}>
-                    {hitRates.l10.percentage}%
-                 </span>
-                 <span className="text-gray-400 text-sm font-bold">{hitRates.l10.hits} of {hitRates.l10.total}</span>
+                 {(() => {
+                   const selectedSplit = displayHitRates?.[gameHistoryNum <= 5 ? 'l5' : gameHistoryNum <= 10 ? 'l10' : 'l20'] || { hits: 0, total: 0, percentage: 0 };
+                   return (
+                     <>
+                       <span className={`text-4xl font-black ${
+                         selectedSplit.percentage >= 50 
+                           ? 'text-sports-accent text-glow-accent' 
+                           : 'text-sports-red text-glow-red'
+                       }`}>
+                          {selectedSplit.percentage}%
+                       </span>
+                       <span className="text-gray-400 text-sm font-bold">
+                         {selectedSplit.hits} of {selectedSplit.total}
+                       </span>
+                     </>
+                   );
+                 })()}
               </div>
               <p className="text-gray-400 text-[11px] mt-4 flex gap-3">
                  <span>Average: <strong className="text-white ml-1">{mean}</strong></span>
@@ -334,15 +578,15 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
 
            {/* Right Grid Matrix */}
            <div className="grid grid-cols-4 gap-x-8 gap-y-3 text-[11px]">
-              <div className="flex justify-between w-24"><span className="text-gray-500">L5</span>   <span className={hitRates.l5.percentage >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{hitRates.l5.percentage}%</span></div>
-              <div className="flex justify-between w-24"><span className="text-gray-500">L20</span>  <span className={hitRates.l20.percentage >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{hitRates.l20.percentage}%</span></div>
-              <div className="flex justify-between w-24"><span className="text-gray-500">H2H</span>  <span className={hitRates.h2h.percentage >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{hitRates.h2h.percentage}%</span></div>
-              <div className="flex justify-between w-24"><span className="text-gray-500">2024</span> <span className={hitRates.season.percentage >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{hitRates.season.percentage}%</span></div>
+              <div className="flex justify-between w-24"><span className="text-gray-500">L5</span>   <span className={(displayHitRates?.l5?.percentage || 0) >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{displayHitRates?.l5?.percentage || 0}%</span></div>
+              <div className="flex justify-between w-24"><span className="text-gray-500">L20</span>  <span className={(displayHitRates?.l20?.percentage || 0) >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{displayHitRates?.l20?.percentage || 0}%</span></div>
+              <div className="flex justify-between w-24"><span className="text-gray-500">H2H</span>  <span className={(displayHitRates?.h2h?.percentage || 0) >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{displayHitRates?.h2h?.percentage || 0}%</span></div>
+              <div className="flex justify-between w-24"><span className="text-gray-500">2024</span> <span className={(displayHitRates?.season?.percentage || 0) >= 50 ? 'text-[#1df16a] font-bold' : 'text-[#ef4444] font-bold'}>{displayHitRates?.season?.percentage || 0}%</span></div>
            </div>
         </div>
 
         {/* ── BAR CHART ── */}
-        <div className="h-72 w-full mt-10 relative">
+        <div className="h-72 w-full mt-10 relative min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={renderChartData} margin={{ top: 20, right: 10, left: -20, bottom: 40 }} barGap={5} barCategoryGap="20%">
               {/* Very faint dark horizontal lines */}
@@ -386,9 +630,7 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
               <Bar 
                 dataKey="value" 
                 radius={[2, 2, 0, 0]}
-                label={{ position: 'top', fill: '#1df16a', fontSize: 13, fontWeight: 'bold', formatter: (val, entry) => {
-                  return <text fill={val >= line ? '#1df16a' : '#ef4444'} fontSize={13} fontWeight="bold">{val}</text>
-                }}}
+                label={{ position: 'top', fontSize: 12, fontWeight: 'bold' }}
               >
                 {renderChartData.map((entry, index) => {
                   const isHit = entry.value >= line;
@@ -413,7 +655,7 @@ const PropAnalysisDashboard = memo(({ stats, playerName, teamAbbr, nextOpponent 
           </div>
           <div className="absolute right-0 bottom-1 w-[50px] sm:w-[80px] flex justify-center">
              <div className="flex flex-col items-center">
-               <div className="w-5 h-5 rounded-full bg-sports-dark border border-[#1df16a]/50 flex items-center justify-center text-[8px] font-bold text-[#1df16a] mb-0.5">{nextOpponent.abbreviation || 'UNK'}</div>
+               <div className="w-5 h-5 rounded-full bg-sports-dark border border-[#1df16a]/50 flex items-center justify-center text-[8px] font-bold text-[#1df16a] mb-0.5">{nextOpponent?.abbreviation || 'UNK'}</div>
                <span className="text-[8px] text-gray-400 uppercase">Today</span>
              </div>
           </div>

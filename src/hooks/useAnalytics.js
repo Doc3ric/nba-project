@@ -85,10 +85,12 @@ export const useBettingEdge = (stats, category, line, matchupContext = null) => 
     }
 
     const prediction = calculatePredictionScore(stats, category, line, matchupContext);
+    const l5HitRate = calculateHitRate(stats, category, line, 5);
+    const l10HitRate = calculateHitRate(stats, category, line, 10);
     
     return {
-      hitRateL5: calculateHitRate(stats, category, line, 5),
-      hitRateL10: calculateHitRate(stats, category, line, 10),
+      hitRateL5: l5HitRate?.percentage || 0,
+      hitRateL10: l10HitRate?.percentage || 0,
       predictionScore: prediction.probability,
       predictionConfidence: prediction.confidence,
       consistencyObj: calculateConsistencyScore(stats, category, 15)

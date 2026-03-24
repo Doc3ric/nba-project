@@ -65,7 +65,7 @@ const BettingEdgeCard = memo(({ stats, categoryLabel = "Points", category = "pts
               {hitRateL5}%
             </span>
           </div>
-          <div className="w-full h-8 px-1">
+          <div className="w-full h-8 px-1 min-w-0">
              <ResponsiveContainer width="100%" height="100%">
                <LineChart data={sparklineData}>
                   <Line type="monotone" dataKey="val" stroke={hitRateL5 >= 60 ? "#1a9a5c" : hitRateL5 <= 40 ? "#ef4444" : "#4b5563"} strokeWidth={2} dot={{ r: 1.5, fill: hitRateL5 >= 60 ? "#1a9a5c" : hitRateL5 <= 40 ? "#ef4444" : "#4b5563" }} isAnimationActive={false} />

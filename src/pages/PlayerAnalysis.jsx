@@ -127,15 +127,21 @@ const PlayerAnalysis = () => {
                 className="w-20 h-20 border-2 border-sports-accent/30 shadow-[0_0_20px_rgba(29,241,106,0.2)]" 
               />
               <div>
-                <h1 className="text-3xl font-black text-white tracking-tight leading-none mb-1">
-                  {playerDetails.first_name} {playerDetails.last_name}
+                <h1 className="text-3xl font-black text-white tracking-tight leading-none mb-1 flex items-center flex-wrap gap-2">
+                  <span>{playerDetails.first_name} {playerDetails.last_name}</span>
                   {playerDetails.jersey_number && (
-                    <span className="ml-3 text-lg text-sports-muted font-bold">
+                    <span className="text-lg text-sports-muted font-bold">
                       #{playerDetails.jersey_number}
                     </span>
                   )}
+                  {playerDetails.injury_status && playerDetails.injury_status !== 'Active' && (
+                    <span className="ml-2 text-xs bg-red-500/20 text-red-400 border border-red-500/40 px-2 py-0.5 rounded font-bold flex items-center gap-1 shadow-[0_0_10px_rgba(239,68,68,0.3)] uppercase">
+                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" />
+                      INJURED {playerDetails.injury_status !== 'Injured' && playerDetails.injury_status !== 'Out' ? `- ${playerDetails.injury_status}` : ''}
+                    </span>
+                  )}
                 </h1>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 mt-1">
                   <span className="text-sports-muted font-bold text-sm tracking-widest uppercase">
                     {playerDetails.team?.full_name || playerDetails.team?.abbreviation}
                   </span>
@@ -184,11 +190,13 @@ const PlayerAnalysis = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
               <PropAnalysisDashboard
+                playerId={id}
                 stats={stats}
                 playerName={playerDetails
                   ? `${playerDetails.first_name} ${playerDetails.last_name}`
                   : 'Loading…'}
                 teamAbbr={playerDetails?.team?.abbreviation || ''}
+                injuryStatus={playerDetails?.injury_status}
                 nextOpponent={nextOpponent ? { id: 0, abbreviation: nextOpponent } : null}
               />
             </div>

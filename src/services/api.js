@@ -387,15 +387,26 @@ const _generateMockStats = (playerId) => {
   const baseRebs   = playerId === 203999 ? 12 : 7;
   const baseAsts   = playerId === 203999 ? 9  : 6;
   let seed = playerId;
+  const mockOpponents = ['BOS', 'NYK', 'PHI', 'BKN', 'TOR', 'CHI', 'CLE', 'DET', 'IND', 'MIL', 'ATL', 'CHA', 'MIA', 'ORL', 'WAS', 'DEN', 'MIN', 'OKC', 'POR', 'UTA', 'GSW', 'LAC', 'LAL', 'PHX', 'SAC', 'DAL', 'HOU', 'MEM', 'NOP', 'SAS'];
+
   return Array.from({ length: 20 }, (_, i) => {
     const date = new Date('2025-03-01');
     date.setDate(date.getDate() - i * 2);
+    
+    // Pick an opponent pseudo-randomly based on seed
+    const oppAbbr = mockOpponents[Math.abs(Math.floor(_pseudoRandom(seed + i * 10) * mockOpponents.length)) % mockOpponents.length];
+    const isHome = _pseudoRandom(seed + i * 11) > 0.5;
+
     return {
       id: `mock_${i}`,
+      team: { id: 1610612747, abbreviation: 'LAL' },
+      player: { id: playerId, team_id: 1610612747 },
       game: {
         date: date.toISOString().split('T')[0],
-        home_team:    { abbreviation: 'LAL' },
-        visitor_team: { abbreviation: 'BOS' },
+        home_team_id: isHome ? 1610612747 : 2,
+        visitor_team_id: isHome ? 2 : 1610612747,
+        home_team:    { abbreviation: isHome ? 'LAL' : oppAbbr, id: isHome ? 1610612747 : 2 },
+        visitor_team: { abbreviation: isHome ? oppAbbr : 'LAL', id: isHome ? 2 : 1610612747 },
       },
       pts:  Math.max(10, Math.round(basePoints + (_pseudoRandom(seed++) * 20 - 10))),
       reb:  Math.max(2,  Math.round(baseRebs   + (_pseudoRandom(seed++) * 8  - 4))),
@@ -430,5 +441,28 @@ export const fetchGamePlayByPlay = async (gameId) => {
   } catch (err) {
     console.warn(`Could not fetch play-by-play for game ${gameId}`, err);
     return [];
+  }
+};
+
+// ── Player Splits Endpoint ───────────────────────────────────────────────────
+
+export const getPlayerSplits = async (playerId, stat = 'pts', line = 27.5, opponent = null) => {
+  if (!playerId) return null;
+  const key = `splits:${playerId}:${stat}:${line}:${opponent || 'ALL'}`;
+  const cached = checkCache(key);
+  if (cached) return cached;
+
+  try {
+    const params = { stat, line };
+    if (opponent && opponent !== 'ALL') {
+      params.opponent = opponent;
+    }
+    const res = await apiClient.get(`/players/${playerId}/splits`, { params });
+    const data = res.data.data;
+    setCache(key, data);
+    return data;
+  } catch (err) {
+    console.warn(`[API] getPlayerSplits failed for player ${playerId}:`, err.message);
+    return null;
   }
 };

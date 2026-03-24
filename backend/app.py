@@ -780,13 +780,21 @@ def sync_player_stats(player_id: int, db: Session) -> bool:
                 continue
             seen.add(d['game_id'])
 
+            # Look up team IDs from abbreviations
+            home_team_data = team_lookup.get(d['home_abbr'], {})
+            visitor_team_data = team_lookup.get(d['visit_abbr'], {})
+            home_team_id = home_team_data.get('id')
+            visitor_team_id = visitor_team_data.get('id')
+
             # Upsert Game record
             g = db.query(Game).filter(Game.id == d['game_id']).first()
             if not g:
                 g = Game(
                     id=d['game_id'],
                     game_date=d['iso_date'],
+                    home_team_id=home_team_id,
                     home_team_abbreviation=d['home_abbr'],
+                    visitor_team_id=visitor_team_id,
                     visitor_team_abbreviation=d['visit_abbr'],
                     status="Final"
                 )
@@ -1186,10 +1194,19 @@ def _log_to_dict(log: GameLog) -> dict:
     g = log.game
     return {
         "id": str(log.game_id),
+        "player_id": log.player_id,
+        "team": {
+            "id": log.player.team_id if log.player else None,
+            "abbreviation": log.player.team_abbreviation if log.player else ""
+        },
         "game": {
             "date":         g.game_date if g else "2024-01-01",
-            "home_team":    {"abbreviation": g.home_team_abbreviation  if g else ""},
-            "visitor_team": {"abbreviation": g.visitor_team_abbreviation if g else ""},
+            "home_team":    {"id": g.home_team_id if g else None, "abbreviation": g.home_team_abbreviation  if g else ""},
+            "visitor_team": {"id": g.visitor_team_id if g else None, "abbreviation": g.visitor_team_abbreviation if g else ""},
+            "home_team_id": g.home_team_id if g else None,
+            "visitor_team_id": g.visitor_team_id if g else None,
+            "home_team_score": g.home_team_score if g else None,
+            "visitor_team_score": g.visitor_team_score if g else None,
         },
         "pts":        log.pts        or 0,
         "reb":        log.reb        or 0,
@@ -2094,6 +2111,128 @@ def get_player_h2h(player_id: int, opponent: str = Query(...)):
     except Exception as e:
         logger.error(f"H2H failed {player_id} vs {opponent}: {e}")
         raise HTTPException(status_code=500, detail="H2H fetch failed")
+
+
+# ── Player Splits Endpoint ─────────────────────────────────────────────────────
+@app.get("/api/players/{player_id}/splits")
+@auto_retry
+def get_player_splits(
+    player_id: int,
+    stat: str = Query(...),  # e.g., 'pts', 'reb', 'ast', 'fg3m', etc.
+    line: float = Query(...),  # e.g., 27.5
+    opponent: str = Query(None),  # Optional opponent team for H2H filtering
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate hit rate splits for a player against a target line.
+    Returns L5, L10, L20, season hit rates, plus avg/median.
+    
+    Example: GET /api/players/2544/splits?stat=pts&line=27.5
+    Optional: ?opponent=LAL for H2H filtering
+    """
+    try:
+        # Fetch all game logs for the player (all seasons)
+        logs = (db.query(GameLog)
+                .filter(GameLog.player_id == player_id)
+                .order_by(GameLog.id.desc())
+                .all())
+        
+        if not logs:
+            return {
+                "data": {
+                    "l5": {"hits": 0, "total": 0, "percentage": 0},
+                    "l10": {"hits": 0, "total": 0, "percentage": 0},
+                    "l20": {"hits": 0, "total": 0, "percentage": 0},
+                    "h2h": {"hits": 0, "total": 0, "percentage": 0},
+                    "season": {"hits": 0, "total": 0, "percentage": 0},
+                    "avg": 0,
+                    "median": 0,
+                    "stat": stat,
+                    "line": line
+                }
+            }
+        
+        # Helper function to calculate hit rate
+        def calc_hits(games_list: list, stat_name: str, target_line: float) -> dict:
+            valid_games = [g for g in games_list if g.mins and g.mins != '00:00' and g.mins != '0']
+            if not valid_games:
+                return {"hits": 0, "total": 0, "percentage": 0}
+            
+            stat_name_lower = stat_name.lower()
+            hits = 0
+            for g in valid_games:
+                stat_val = getattr(g, stat_name_lower, None)
+                if stat_val is not None and stat_val > target_line:
+                    hits += 1
+            
+            total = len(valid_games)
+            percentage = round((hits / total * 100)) if total > 0 else 0
+            
+            return {"hits": hits, "total": total, "percentage": percentage}
+        
+        # Helper function to get average and median
+        def calc_stats(games_list: list, stat_name: str) -> tuple:
+            valid_games = [g for g in games_list if g.mins and g.mins != '00:00' and g.mins != '0']
+            if not valid_games:
+                return 0, 0
+            
+            stat_name_lower = stat_name.lower()
+            values = [getattr(g, stat_name_lower, 0) for g in valid_games]
+            values = [v for v in values if v is not None and v > 0]
+            if not values:
+                return 0, 0
+            
+            avg = round(sum(values) / len(values), 1)
+            sorted_vals = sorted(values)
+            median = (sorted_vals[len(sorted_vals)//2 - 1] + sorted_vals[len(sorted_vals)//2]) / 2 if len(sorted_vals) % 2 == 0 else sorted_vals[len(sorted_vals)//2]
+            median = round(median, 1)
+            
+            return avg, median
+        
+        # Filter by opponent if provided
+        filtered_logs = logs
+        if opponent:
+            opponent_upper = opponent.upper()
+            filtered_logs = [
+                g for g in logs
+                if g.game and (
+                    g.game.home_team_abbreviation == opponent_upper or
+                    g.game.visitor_team_abbreviation == opponent_upper
+                )
+            ]
+        
+        # Calculate splits
+        l5_hits = calc_hits(filtered_logs[:5], stat, line)
+        l10_hits = calc_hits(filtered_logs[:10], stat, line)
+        l20_hits = calc_hits(filtered_logs[:20], stat, line)
+        season_hits = calc_hits(filtered_logs, stat, line)
+        
+        # For H2H, if opponent was provided, use filtered logs; otherwise return empty
+        if opponent and filtered_logs:
+            h2h_hits = calc_hits(filtered_logs, stat, line)
+        else:
+            h2h_hits = {"hits": 0, "total": 0, "percentage": 0}
+        
+        avg, median = calc_stats(filtered_logs if filtered_logs else logs, stat)
+        
+        return {
+            "data": {
+                "l5": l5_hits,
+                "l10": l10_hits,
+                "l20": l20_hits,
+                "h2h": h2h_hits,
+                "season": season_hits,
+                "avg": avg,
+                "median": median,
+                "stat": stat,
+                "line": line,
+                "opponent": opponent.upper() if opponent else None
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"Splits endpoint failed for player {player_id} stat {stat}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to calculate splits: {str(e)}")
 
 
 # ── Dashboard Summary ──────────────────────────────────────────────────────────

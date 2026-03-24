@@ -36,8 +36,8 @@ export const calculateFilteredStats = (stats, filters = {}) => {
   if (!stats) return [];
   return stats.filter(game => {
     let match = true;
-    if (filters.homeAway === 'Home') match = match && game.team?.id === game.game?.home_team_id;
-    if (filters.homeAway === 'Away') match = match && game.team?.id !== game.game?.home_team_id;
+    if (filters.homeAway === 'Home') match = match && game.team?.id !== undefined && game.team?.id === game.game?.home_team_id;
+    if (filters.homeAway === 'Away') match = match && game.team?.id !== undefined && game.team?.id !== game.game?.home_team_id;
     if (filters.winLoss === 'W') match = match && ((game.team?.id === game.game?.home_team_id && game.game?.home_team_score > game.game?.visitor_team_score) || (game.team?.id !== game.game?.home_team_id && game.game?.visitor_team_score > game.game?.home_team_score));
     if (filters.winLoss === 'L') match = match && ((game.team?.id === game.game?.home_team_id && game.game?.home_team_score < game.game?.visitor_team_score) || (game.team?.id !== game.game?.home_team_id && game.game?.visitor_team_score < game.game?.home_team_score));
     if (filters.opponentId) match = match && (game.game?.home_team_id === filters.opponentId || game.game?.visitor_team_id === filters.opponentId);
@@ -86,15 +86,36 @@ export const formatChartData = (stats, category = 'pts', line = null) => {
   
   const rollingData = calculateRollingAverage(stats, category, 3);
   
-  return rollingData.slice(rollingData.length > 20 ? rollingData.length - 20 : 0).map(game => ({
-    date: new Date(game.game.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    fullDate: new Date(game.game.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    value: game[category] || 0,
-    rollingAvg: game.rollingAvg,
-    isHit: line ? (game[category] || 0) > line : null,
-    opponent: game.game.home_team_id === game.team?.id ? game.game.visitor_team?.abbreviation : game.game.home_team?.abbreviation,
-    isHome: game.team?.id === game.game?.home_team_id
-  }));
+  return rollingData.slice(rollingData.length > 20 ? rollingData.length - 20 : 0).map(game => {
+    let isHome = false;
+    let opponent = '';
+    
+    if (game.game) {
+      const homeId = game.game.home_team_id || game.game.home_team?.id;
+      const homeAbbr = game.game.home_team?.abbreviation || game.game.home_team_abbreviation || '';
+      const visitorAbbr = game.game.visitor_team?.abbreviation || game.game.visitor_team_abbreviation || '';
+      
+      if (game.team?.id && homeId) {
+        isHome = String(game.team.id) === String(homeId);
+        opponent = isHome ? visitorAbbr : homeAbbr;
+      } else if (game.team?.abbreviation) {
+        isHome = game.team.abbreviation === homeAbbr;
+        opponent = isHome ? visitorAbbr : homeAbbr;
+      } else {
+        opponent = homeAbbr || visitorAbbr || 'UNK';
+      }
+    }
+
+    return {
+      date: game.game?.date ? new Date(game.game.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '',
+      fullDate: game.game?.date ? new Date(game.game.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '',
+      value: game[category] || 0,
+      rollingAvg: game.rollingAvg,
+      isHit: line ? (game[category] || 0) > line : null,
+      opponent: opponent || 'UNK',
+      isHome
+    };
+  });
 };
 
 /**
